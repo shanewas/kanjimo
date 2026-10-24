@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from conftest import CSRF, IP
 
-CODE_RE = re.compile(r"\b(\d{6})\b")
+CODE_RE = re.compile(r"\b(\d{8})\b")
 
 
 def invite(client, email: str) -> None:

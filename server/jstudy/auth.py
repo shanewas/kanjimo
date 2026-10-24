@@ -8,7 +8,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Body, Depends, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Request, Response
 from psycopg import sql
 
 from .config import MAX_LEVEL
@@ -21,14 +21,13 @@ CODE_ATTEMPTS = 5
 CODES_PER_EMAIL_HOUR = 5
 CODES_PER_IP_HOUR = 20
 VERIFIES_PER_IP_HOUR = 30
-GUESSES_PER_EMAIL_DAY = 15  # caps a targeted brute force that rotates IPs: 5 codes x 5 tries would allow 25/h
 SESSION_TTL = timedelta(days=30)
 SESSION_MAX = timedelta(days=365)
 SESSION_BUMP = timedelta(minutes=10)
 DAILY_HITS = 300
 HOUR = timedelta(hours=1)
 EMAIL_RE = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+")
-CODE_RE = re.compile(r"\d{6}")
+CODE_RE = re.compile(r"\d{8}")  # 5 codes/h x 5 tries: a year of guessing finds one in ~0.2%
 PUBLIC_DATA = frozenset({"/data/index.json", "/data/LICENSE-DATA.txt", "/data/ATTRIBUTION.json"})
 LEVEL_RE = re.compile(r"/data/(cards|items|levels|own)/level-(\d{2})\.json")
 AUDIO_RE = re.compile(r"/media/audio/[a-f0-9]{16,64}\.(mp3|webm)")
@@ -168,37 +167,41 @@ def code_mail(code: str, origin: str) -> str:
 
 
 @router.post("/api/auth/code", status_code=202)
-def request_code(request: Request, body: dict = Body(...)):
+def request_code(request: Request, tasks: BackgroundTasks, body: dict = Body(...)):
+    """Answers 202 alike for invited, uninvited and over-limit addresses, and mails after the response,
+    so neither the status nor the timing tells who is invited."""
     st = request.app.state
     now = st.clock()
     email = normalize_email(body.get("email"))
     if email is None:
         raise ApiError(400, "invalid_email")
     ip = client_ip(request)
-    code = f"{secrets.randbelow(10**6):06d}"
+    code = f"{secrets.randbelow(10**8):08d}"
     with st.pool.connection() as conn:
-        if not admitted(conn, email):
-            raise ApiError(403, "not_invited")
-        guesses = conn.execute(
-            "SELECT coalesce(sum(attempts), 0) AS n FROM login_codes WHERE email = %s AND created_at > %s",
-            (email, now - timedelta(days=1)),
-        ).fetchone()["n"]
-        if guesses >= GUESSES_PER_EMAIL_DAY:
-            raise ApiError(429, "too_many_requests", headers={"Retry-After": "86400"}, retry_after=86400)
-        _limit(conn, "email", email, now, CODES_PER_EMAIL_HOUR)
         if ip is not None:
             _limit(conn, "ip", ip, now, CODES_PER_IP_HOUR)
+        if not admitted(conn, email):
+            return {"ok": True}
+        try:
+            _limit(conn, "email", email, now, CODES_PER_EMAIL_HOUR)
+        except ApiError:
+            log.warning("login code cap reached for an invited address")
+            return {"ok": True}
         conn.execute(
             "INSERT INTO login_codes (email, code_hash, ip, created_at, expires_at) VALUES (%s, %s, %s, %s, %s)",
             (email, code_hash(st.settings.session_pepper, email, code), ip, now, now + CODE_TTL),
         )
+    tasks.add_task(_mail_code, st, email, code, now)
+    return {"ok": True}
+
+
+def _mail_code(st, email: str, code: str, now: datetime) -> None:
     try:
         st.mailer.send(email, "Your sign-in code", code_mail(code, st.settings.public_origin))
     except Exception as exc:  # provider-agnostic boundary: whatever failed, the code must not stay usable
         log.error("login code mail failed: %s: %s", type(exc).__name__, exc)
         with st.pool.connection() as conn:
             conn.execute("UPDATE login_codes SET used_at = %s WHERE email = %s AND used_at IS NULL", (now, email))
-    return {"ok": True}
 
 
 @router.post("/api/auth/verify")

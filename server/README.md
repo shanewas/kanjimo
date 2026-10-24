@@ -1,6 +1,6 @@
 # jstudy server
 
-FastAPI + PostgreSQL 16 backend for the study app: emailed six-digit login codes, cookie sessions,
+FastAPI + PostgreSQL 16 backend for the study app: emailed eight-digit login codes, cookie sessions,
 Google sign-in, progress sync with `If-Match` revisions, and the two `auth_request` endpoints nginx calls
 before serving gated content. There is no billing: every level is open to any signed-in user.
 

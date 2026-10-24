@@ -68,7 +68,7 @@ def test_n4_logout_everywhere(client):
 
 def test_n5_five_wrong_guesses_void_the_code(client):
     code = request_code(client, "a@example.com")
-    wrong = "000000" if code != "000000" else "000001"
+    wrong = "00000000" if code != "00000000" else "00000001"
     for _ in range(5):
         r = client.post("/api/auth/verify", json={"email": "a@example.com", "code": wrong})
         assert r.status_code == 400 and r.json() == {"error": "invalid_code"}
@@ -91,9 +91,7 @@ def test_n8_five_codes_per_email_per_hour(client):
     for _ in range(5):
         request_code(client, "a@example.com")
     r = client.post("/api/auth/code", json={"email": "a@example.com"})
-    assert r.status_code == 429
-    assert r.json()["error"] == "too_many_requests" and r.json()["retry_after"] > 0
-    assert int(r.headers["retry-after"]) == r.json()["retry_after"]
+    assert r.status_code == 202, "over the cap looks like any other request"
     assert len(client.app.state.mailer.sent) == 5
     client.app.state.clock.advance(hours=1, seconds=1)
     assert client.post("/api/auth/code", json={"email": "a@example.com"}).status_code == 202
@@ -111,14 +109,14 @@ def test_n9_twenty_codes_per_ip_per_hour(client):
 def test_verify_attempts_are_capped_per_verifying_ip(client, q):
     guesser = TestClient(client.app, base_url="https://testserver", client=("198.51.100.7", 1), headers=CSRF)
     for i in range(30):
-        assert guesser.post("/api/auth/verify", json={"email": f"u{i}@example.com", "code": "000000"}).status_code == 400
+        assert guesser.post("/api/auth/verify", json={"email": f"u{i}@example.com", "code": "00000000"}).status_code == 400
     code = request_code(client, "a@example.com")
     r = guesser.post("/api/auth/verify", json={"email": "a@example.com", "code": code})
     assert r.status_code == 429 and r.headers["retry-after"] == "3600"
     assert q("SELECT count(*) AS n FROM verify_attempts")[0]["n"] == 30
     assert client.post("/api/auth/verify", json={"email": "a@example.com", "code": code}).status_code == 200
     client.app.state.clock.advance(hours=1, seconds=1)
-    assert guesser.post("/api/auth/verify", json={"email": "b@example.com", "code": "000000"}).status_code == 400
+    assert guesser.post("/api/auth/verify", json={"email": "b@example.com", "code": "00000000"}).status_code == 400
 
 
 def test_session_bump_refreshes_the_cookie(client):
@@ -168,15 +166,3 @@ def test_n30_hashes_at_rest_and_logs_hold_no_secrets(client, q, caplog):
     assert session != token.encode() and session == hashlib.sha256(token.encode()).digest()
     assert code not in caplog.text and token not in caplog.text
 
-
-def test_failed_guesses_per_email_lock_new_codes_for_a_day(client):
-    for _ in range(3):
-        code = request_code(client, "a@example.com")
-        wrong = "000000" if code != "000000" else "000001"
-        for _ in range(5):
-            client.post("/api/auth/verify", json={"email": "a@example.com", "code": wrong})
-        client.app.state.clock.advance(hours=1, seconds=1)
-    r = client.post("/api/auth/code", json={"email": "a@example.com"})
-    assert r.status_code == 429 and r.json()["retry_after"] == 86400
-    client.app.state.clock.advance(days=1)
-    assert client.post("/api/auth/code", json={"email": "a@example.com"}).status_code == 202

@@ -9,7 +9,7 @@ def admin_client(client):
 
 def test_uninvited_address_gets_no_code(client, q):
     r = client.post("/api/auth/code", json={"email": "stranger@example.com"})
-    assert r.status_code == 403 and r.json() == {"error": "not_invited"}
+    assert r.status_code == 202 and r.json() == {"ok": True}
     assert client.app.state.mailer.sent == []
     assert q("SELECT count(*) AS n FROM login_codes")[0]["n"] == 0
 
@@ -52,7 +52,9 @@ def test_admin_invites_lists_and_revokes(client):
     assert body["invites"][0]["invited_by"] == "boss@example.com"
     assert admin.request("DELETE", "/api/admin/invites", json={"email": "friend@example.com"}).status_code == 204
     assert admin.get("/api/admin/users").json()["invites"] == []
-    assert admin.post("/api/auth/code", json={"email": "friend@example.com"}).status_code == 403
+    sent = len(admin.app.state.mailer.sent)
+    assert admin.post("/api/auth/code", json={"email": "friend@example.com"}).status_code == 202
+    assert len(admin.app.state.mailer.sent) == sent
 
 
 def test_disable_ends_sessions_and_blocks_sign_in(client, q):
@@ -63,7 +65,9 @@ def test_disable_ends_sessions_and_blocks_sign_in(client, q):
     assert admin.patch(f"/api/admin/users/{member_id}", json={"disabled": True}).status_code == 200
     assert member.get("/api/me").status_code == 401
     assert member.get("/api/auth/check").status_code == 401
-    assert member.post("/api/auth/code", json={"email": "m@example.com"}).status_code == 403
+    sent = len(member.app.state.mailer.sent)
+    assert member.post("/api/auth/code", json={"email": "m@example.com"}).status_code == 202
+    assert len(member.app.state.mailer.sent) == sent
     assert admin.patch(f"/api/admin/users/{member_id}", json={"disabled": False}).status_code == 200
     login(member, "m@example.com")
     assert member.get("/api/me").status_code == 200

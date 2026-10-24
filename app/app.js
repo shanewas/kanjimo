@@ -1753,7 +1753,7 @@ function renderSettings(v) {
 }
 
 // ---------- account ----------
-// Email → six-digit code → signed-in panel. Every call goes through sync.js;
+// Email → eight-digit code → signed-in panel. Every call goes through sync.js;
 // this file renders and maps the API's error codes to sentences.
 let syncNotice = ""; // one line from sync.js, shown on the next Today or Account paint
 let syncStart = Promise.resolve(); // the boot probe; Account waits for it
@@ -1844,7 +1844,7 @@ async function renderAccount(v, query) {
 function renderSignIn(p, addr = "", notice = "") {
   const google = el("div", "btn-row");
   google.appendChild(link("/api/auth/google/start", "Continue with Google", "btn btn-primary"));
-  p.append(google, el("p", "muted", "Or use your email. A six-digit code arrives by mail; there is no password."));
+  p.append(google, el("p", "muted", "Or use your email. An eight-digit code arrives by mail; there is no password. Kanjimo is invite-only."));
   const email = textInput(p, "acc-email", "email", "Email");
   email.autocomplete = "email";
   email.value = addr;
@@ -1872,17 +1872,17 @@ function renderSignIn(p, addr = "", notice = "") {
   p.append(row, msg);
 }
 function renderCode(p, addr) {
-  p.appendChild(el("p", "muted", `We sent a code to ${addr}. It works for ten minutes.`));
+  p.appendChild(el("p", "muted", `If ${addr} has an invite, a code is on its way. It works for ten minutes.`));
   const code = textInput(p, "acc-code", "text", "Code");
   code.className = "code";
   code.inputMode = "numeric";
   code.autocomplete = "one-time-code";
-  code.maxLength = 6;
+  code.maxLength = 8;
   const msg = el("p", "small muted");
   const verify = button("Sign in", "btn btn-primary", () => {
     const c = code.value.trim();
-    if (!/^\d{6}$/.test(c)) {
-      msg.textContent = "Enter the six digits from the mail.";
+    if (!/^\d{8}$/.test(c)) {
+      msg.textContent = "Enter the eight digits from the mail.";
       return;
     }
     guarded(verify, msg, async () => {
