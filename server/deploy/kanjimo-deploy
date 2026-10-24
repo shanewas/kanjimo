@@ -6,6 +6,8 @@
 # must be on main, so the CI key can't ship code that isn't in the repo.
 # The release is code-only: content comes from the live release's www/data, mnemonics from
 # /opt/jstudy/mnemonics (kept out of the repo), media is hard-linked from the live release.
+# Repo code never runs as root: the build and pip run as jstudy-build, migrate as jstudy. Root only
+# fetches, swaps symlinks, installs the nginx config and restarts the service.
 set -euo pipefail
 umask 022
 
@@ -18,6 +20,7 @@ read -r ENV SHA EXTRA <<<"${SSH_ORIGINAL_COMMAND:-${*:-}}"
 exec 9>/run/kanjimo-deploy.lock
 flock -w 900 9 || die "another deploy is still running"
 
+BUILD_USER=jstudy-build
 SRC=/opt/jstudy/src.git
 RELEASES=/opt/jstudy/releases
 VENV=/opt/jstudy/venv
@@ -32,21 +35,30 @@ NGINX=/etc/nginx/sites-available/jstudy-$ENV.conf
 
 git -C "$SRC" fetch -q origin +refs/heads/main:refs/heads/main
 git -C "$SRC" merge-base --is-ancestor "$SHA" main || die "$SHA is not on main"
+# Forward only: an older commit could bring back a fixed hole. A real rollback is done by hand.
+LIVE_ID=$(cat "$WWW/app/version.txt" 2>/dev/null || true)
+if [[ $LIVE_ID =~ ^[0-9a-f]{12}$ ]] && LIVE_SHA=$(git -C "$SRC" rev-parse -q --verify "$LIVE_ID^{commit}"); then
+  git -C "$SRC" merge-base --is-ancestor "$LIVE_SHA" "$SHA" || die "$SHA is older than the live $LIVE_ID"
+fi
 
 TMP=$(mktemp -d /opt/jstudy/build.XXXXXX)
-cleanup() { git -C "$SRC" worktree remove --force "$TMP/src" 2>/dev/null || true; rm -rf "$TMP"; }
+cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 
 LIVE_WWW=$(readlink -f "$WWW")
 if [[ ! -d $REL ]]; then
   echo "building $ID"
-  git -C "$SRC" worktree add -q --detach "$TMP/src" "$SHA"
   cp -a "$LIVE_WWW/data" "$TMP/content"
   find "$TMP/content" -name '*.gz' -delete
   rm -rf "$TMP/content/own"
-  mkdir "$TMP/content/own"
+  mkdir "$TMP/content/own" "$TMP/src"
   cp /opt/jstudy/mnemonics/level-*.json "$TMP/content/own/"
-  python3 -I "$TMP/src/tools/release.py" --content "$TMP/content" --out "$TMP/out"
+  chown -R "$BUILD_USER:" "$TMP"
+  git -C "$SRC" archive "$SHA" | runuser -u "$BUILD_USER" -- tar -x -C "$TMP/src"
+  runuser -u "$BUILD_USER" -- python3 -I "$TMP/src/tools/release.py" \
+    --content "$TMP/content" --out "$TMP/out" --version "$ID"
+  [[ -z $(find "$TMP/out" -type l -print -quit) ]] || die "the release contains a symlink"
+  chown -R root:root "$TMP/out"
   chmod -R u=rwX,go=rX "$TMP/out"
   cp -al "$LIVE_WWW/media" "$TMP/out/www/media"
   mv "$TMP/out" "$REL"
@@ -55,11 +67,11 @@ fi
 # The venv is shared by both instances; it remembers the lock it was last installed from.
 if ! cmp -s "$REL/server/requirements.lock" "$VENV/requirements.lock"; then
   echo "installing requirements.lock"
-  "$VENV/bin/pip" install -q --require-hashes -r "$REL/server/requirements.lock"
+  runuser -u "$BUILD_USER" -- "$VENV/bin/pip" install -q --no-cache-dir --require-hashes -r "$REL/server/requirements.lock"
   cp "$REL/server/requirements.lock" "$VENV/requirements.lock"
 fi
 
-(cd "$REL/server" && "$VENV/bin/python" -m jstudy.cli --env "/etc/jstudy/$ENV.env" migrate)
+(cd "$REL/server" && runuser -u jstudy -- "$VENV/bin/python" -m jstudy.cli --env "/etc/jstudy/$ENV.env" migrate)
 
 NGINX_BAK=
 git -C "$SRC" show "$SHA:server/deploy/nginx-jstudy-$ENV.conf" >"$TMP/nginx.conf"

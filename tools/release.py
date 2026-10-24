@@ -70,8 +70,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--content", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument("--version", help="release id; default: the checkout's short HEAD")
     args = parser.parse_args()
-    version = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--short=12", "HEAD"], check=True,
+    version = args.version or subprocess.run(["git", "-C", str(REPO), "rev-parse", "--short=12", "HEAD"], check=True,
                              capture_output=True, encoding="utf-8", errors="replace").stdout.strip()
     try:
         build(args.content, args.out, version)
