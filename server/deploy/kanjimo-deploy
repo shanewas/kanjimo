@@ -1,0 +1,112 @@
+#!/bin/bash
+# Deploys one commit of main to staging or prod. Installed as /usr/local/sbin/kanjimo-deploy and run by
+# CI through a forced command in root's authorized_keys:
+#   restrict,command="/usr/local/sbin/kanjimo-deploy" ssh-ed25519 AAAA... kanjimo-ci
+# CI can only send "staging <sha>" or "prod <sha>"; the commit is fetched here from the public repo and
+# must be on main, so the CI key can't ship code that isn't in the repo.
+# The release is code-only: content comes from the live release's www/data, mnemonics from
+# /opt/jstudy/mnemonics (kept out of the repo), media is hard-linked from the live release.
+set -euo pipefail
+umask 022
+
+die() { echo "deploy: $*" >&2; exit 1; }
+
+read -r ENV SHA EXTRA <<<"${SSH_ORIGINAL_COMMAND:-${*:-}}"
+[[ ${ENV:-} =~ ^(staging|prod)$ && ${SHA:-} =~ ^[0-9a-f]{40}$ && -z ${EXTRA:-} ]] \
+  || die "usage: kanjimo-deploy staging|prod <40-hex sha>"
+
+exec 9>/run/kanjimo-deploy.lock
+flock -w 900 9 || die "another deploy is still running"
+
+SRC=/opt/jstudy/src.git
+RELEASES=/opt/jstudy/releases
+VENV=/opt/jstudy/venv
+ID=${SHA:0:12}
+REL=$RELEASES/$ID
+if [[ $ENV == prod ]]; then
+  APP=/opt/jstudy/app-prod WWW=/srv/jstudy/www PORT=8081 HOST=kanjimo.shanewas.com
+else
+  APP=/opt/jstudy/app-staging WWW=/srv/jstudy/www-staging PORT=8082 HOST=kanjimo-staging.shanewas.com
+fi
+NGINX=/etc/nginx/sites-available/jstudy-$ENV.conf
+
+git -C "$SRC" fetch -q origin +refs/heads/main:refs/heads/main
+git -C "$SRC" merge-base --is-ancestor "$SHA" main || die "$SHA is not on main"
+
+TMP=$(mktemp -d /opt/jstudy/build.XXXXXX)
+cleanup() { git -C "$SRC" worktree remove --force "$TMP/src" 2>/dev/null || true; rm -rf "$TMP"; }
+trap cleanup EXIT
+
+LIVE_WWW=$(readlink -f "$WWW")
+if [[ ! -d $REL ]]; then
+  echo "building $ID"
+  git -C "$SRC" worktree add -q --detach "$TMP/src" "$SHA"
+  cp -a "$LIVE_WWW/data" "$TMP/content"
+  find "$TMP/content" -name '*.gz' -delete
+  rm -rf "$TMP/content/own"
+  mkdir "$TMP/content/own"
+  cp /opt/jstudy/mnemonics/level-*.json "$TMP/content/own/"
+  python3 -I "$TMP/src/tools/release.py" --content "$TMP/content" --out "$TMP/out"
+  chmod -R u=rwX,go=rX "$TMP/out"
+  cp -al "$LIVE_WWW/media" "$TMP/out/www/media"
+  mv "$TMP/out" "$REL"
+fi
+
+# The venv is shared by both instances; it remembers the lock it was last installed from.
+if ! cmp -s "$REL/server/requirements.lock" "$VENV/requirements.lock"; then
+  echo "installing requirements.lock"
+  "$VENV/bin/pip" install -q --require-hashes -r "$REL/server/requirements.lock"
+  cp "$REL/server/requirements.lock" "$VENV/requirements.lock"
+fi
+
+(cd "$REL/server" && "$VENV/bin/python" -m jstudy.cli --env "/etc/jstudy/$ENV.env" migrate)
+
+NGINX_BAK=
+git -C "$SRC" show "$SHA:server/deploy/nginx-jstudy-$ENV.conf" >"$TMP/nginx.conf"
+if ! cmp -s "$TMP/nginx.conf" "$NGINX"; then
+  echo "installing nginx-jstudy-$ENV.conf"
+  NGINX_BAK=$NGINX.bak-$(date +%Y%m%d%H%M%S)
+  cp -a "$NGINX" "$NGINX_BAK"
+  install -m 644 "$TMP/nginx.conf" "$NGINX"
+  if ! nginx -t -q; then
+    cp -a "$NGINX_BAK" "$NGINX"
+    die "nginx -t failed, kept the old config"
+  fi
+  systemctl reload nginx
+fi
+
+healthy() {
+  local i
+  for i in $(seq 30); do
+    if curl -fs -o /dev/null -H "Host: $HOST" "http://127.0.0.1:$PORT/api/health" \
+      && [[ $(curl -fs -H "Host: $HOST" "http://127.0.0.1:$PORT/app/version.txt") == "$ID" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+OLD_APP=$(readlink "$APP")
+OLD_WWW=$(readlink "$WWW")
+ln -sfn "$REL/server" "$APP"
+ln -sfn "$REL/www" "$WWW"
+systemctl restart "jstudy@$ENV"
+if ! healthy; then
+  echo "deploy: $ID failed its health check on $ENV, rolling back to $OLD_APP" >&2
+  ln -sfn "$OLD_APP" "$APP"
+  ln -sfn "$OLD_WWW" "$WWW"
+  if [[ -n $NGINX_BAK ]]; then
+    cp -a "$NGINX_BAK" "$NGINX"
+    systemctl reload nginx
+  fi
+  systemctl restart "jstudy@$ENV"
+  exit 1
+fi
+echo "$ENV now runs $ID (previous: $OLD_APP)"
+
+# Keep the four newest releases plus anything an instance still points at.
+LINKED=$(readlink -f /opt/jstudy/app-prod /opt/jstudy/app-staging | xargs -n1 dirname)
+ls -1dt "$RELEASES"/*/ | sed 's:/$::' | tail -n +5 | while read -r old; do
+  grep -qxF "$old" <<<"$LINKED" || { echo "pruning $old"; rm -rf "$old"; }
+done

@@ -1,0 +1,8 @@
+# Insert into /etc/cloudflared/config.yml directly above the existing catch-all rule.
+# Plain HTTP on loopback: no noTLSVerify, no self-signed certificate to renew.
+# `cloudflared tunnel ingress validate` before `systemctl restart cloudflared` (the restart drops every tunnelled service for a few seconds).
+  - hostname: kanjimo.shanewas.com
+    service: http://127.0.0.1:8081
+  - hostname: kanjimo-staging.shanewas.com
+    service: http://127.0.0.1:8082
+  - service: http_status:404        # existing catch-all stays last

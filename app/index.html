@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kanjimo</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='#5e548e'/%3E%3Crect x='4.5' y='4.5' width='55' height='55' rx='10' fill='none' stroke='#f4f4f8' stroke-width='1.6'/%3E%3Ctext x='32' y='45' font-size='38' font-weight='700' text-anchor='middle' fill='#f4f4f8' font-family='Yu Gothic,Hiragino Sans,Noto Sans JP,sans-serif'%3E%E3%82%82%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="./theme.js"></script>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<header class="nav" id="nav">
+  <a class="brand" href="#/today"><span class="mark" aria-hidden="true">も</span>Kanjimo</a>
+  <nav class="links" aria-label="Primary">
+    <a href="#/today" data-nav="today">Today</a>
+    <a href="#/review" data-nav="review">Review <span class="due-badge" id="dueBadge" hidden></span></a>
+    <a href="#/progress" data-nav="progress">Progress</a>
+    <a href="#/browse" data-nav="browse">Browse</a>
+    <a href="#/search" data-nav="search">Search</a>
+    <a href="#/account" data-nav="account">Account</a>
+  </nav>
+  <button class="btn btn-ghost btn-sm" id="themeBtn" type="button">Dark</button>
+</header>
+<main id="view" class="wrap" tabindex="-1"></main>
+<noscript><p class="noscript">Kanjimo needs JavaScript.</p></noscript>
+<script type="module" src="./app.js"></script>
+</body>
+</html>
