@@ -180,8 +180,7 @@ def request_code(request: Request, body: dict = Body(...)):
         if not admitted(conn, email):
             raise ApiError(403, "not_invited")
         guesses = conn.execute(
-            "SELECT coalesce(sum(attempts), 0) AS n FROM login_codes WHERE email = %s AND created_at > %s"
-            " AND used_at IS NULL",
+            "SELECT coalesce(sum(attempts), 0) AS n FROM login_codes WHERE email = %s AND created_at > %s",
             (email, now - timedelta(days=1)),
         ).fetchone()["n"]
         if guesses >= GUESSES_PER_EMAIL_DAY:
