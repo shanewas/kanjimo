@@ -4,8 +4,8 @@
 // Rules live in engine.js and ledger.js (pure); persistence in store.js.
 import { fmtWait, stageName, waitFor } from "./scheduler.js";
 import {
-  answer, completeItem, currentPrompt, dueItems, forecast, isAvailable, kanjiProgress, lessonQueue,
-  levelUp, makeSession, pickReviews, resurrect, seedLevels, stageCounts, startItem,
+  answer, completeItem, currentPrompt, dueItems, forecast, gradedElsewhere, isAvailable, kanjiProgress,
+  lessonQueue, levelUp, makeSession, pickReviews, resurrect, seedLevels, stageCounts, startItem,
 } from "./engine.js";
 import {
   dayKey, daysActive, daysBetween, level60Date, markDone, pace, projectLevel, recordLessons, recordReview,
@@ -1241,8 +1241,15 @@ function gradeCurrent(v, correct) {
   const now = Date.now();
   const ev = answer(session, correct);
   if (ev.type === "complete" || ev.type === "lesson") {
-    const level = DB.indexById.get(ev.rid).level;
-    if (ev.type === "complete") {
+    // A sync pull can replace the store mid-session: skip items that vanished
+    // or that another device already graded or started.
+    const rec = DB.indexById.get(ev.rid);
+    const st = DB.store.items[ev.rid];
+    const elsewhere = !rec || (ev.type === "complete" ? !st || gradedElsewhere(st, session.startedAt) : !!st);
+    const level = rec ? rec.level : 0;
+    if (elsewhere) {
+      lastMove = `${glyphOf(ev.rid)} · already graded on another device`;
+    } else if (ev.type === "complete") {
       const { state, from, to } = completeItem(DB.store.items[ev.rid], ev.incorrect, now, level);
       DB.store.items[ev.rid] = { ...state, at: now };
       recordReview(DB.store.days, todayKey(), ev.incorrect, to > from);
