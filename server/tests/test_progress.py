@@ -73,6 +73,32 @@ def test_n35_if_match(client):
     assert put(client, STORE, 0).status_code == 409
 
 
+def test_store_with_lone_surrogate_or_non_finite_number_is_400(client):
+    login(client)
+    surrogate = b'{"store": {"version": 4, "items": {}, "days": {}, "note": "\\ud800"}}'
+    r = client.put("/api/progress", content=surrogate, headers={"If-Match": '"0"', "Content-Type": "application/json"})
+    assert r.status_code == 400 and r.json() == {"error": "bad_store"}
+    for bad in (b"NaN", b"Infinity", b"-Infinity"):
+        body = b'{"store": {"version": 4, "items": {}, "days": {}, "x": ' + bad + b"}}"
+        r = client.put("/api/progress", content=body, headers={"If-Match": '"0"', "Content-Type": "application/json"})
+        assert r.status_code == 400 and r.json() == {"error": "bad_store"}, bad
+    nested = b'{"store": {"version": 4, "items": {"k": ["\\udfff"]}, "days": {}}}'
+    r = client.put("/api/progress", content=nested, headers={"If-Match": '"0"', "Content-Type": "application/json"})
+    assert r.status_code == 400 and r.json() == {"error": "bad_store"}
+    assert client.get("/api/progress").status_code == 204
+    assert put(client, STORE, 0).status_code == 200, "a normal store still validates"
+
+
+def test_oversized_if_match_is_428_not_500(client):
+    login(client)
+    r = client.put("/api/progress", json={"store": STORE}, headers={"If-Match": '"' + "9" * 5000 + '"'})
+    assert r.status_code == 428 and r.json() == {"error": "if_match_required"}
+    r = client.put("/api/progress", json={"store": STORE}, headers={"If-Match": '"9223372036854775808"'})
+    assert r.status_code == 428 and r.json() == {"error": "if_match_required"}
+    assert put(client, STORE, 0).status_code == 200, "normal revisions still parse"
+    assert put(client, {**STORE, "level": 2}, 1).status_code == 200
+
+
 def test_n36_concurrent_puts_with_the_same_revision(client):
     login(client)
     assert put(client, STORE, 0).status_code == 200

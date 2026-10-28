@@ -1,9 +1,13 @@
 import hashlib
+import threading
+from datetime import timedelta
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from conftest import CSRF
+from conftest import CSRF, T0
 from helpers import invite, login, other_client, request_code
+from jstudy.auth import _mail_code, _open_session, code_hash
 
 
 def test_login_flow_cookie_flags_and_me(client):
@@ -117,6 +121,102 @@ def test_verify_attempts_are_capped_per_verifying_ip(client, q):
     assert client.post("/api/auth/verify", json={"email": "a@example.com", "code": code}).status_code == 200
     client.app.state.clock.advance(hours=1, seconds=1)
     assert guesser.post("/api/auth/verify", json={"email": "b@example.com", "code": "00000000"}).status_code == 400
+
+
+def test_concurrent_code_requests_do_not_pass_the_email_cap_together(client, q):
+    # Different IPs, so only the per-email limit can serialise the two requests:
+    # seeded at 4 of 5, exactly one of the pair may issue a code.
+    for _ in range(4):
+        request_code(client, "a@example.com")
+    barrier = threading.Barrier(2)
+    results = []
+
+    def ask(ip):
+        c = TestClient(client.app, base_url="https://testserver", client=(ip, 1), headers=CSRF)
+        barrier.wait()
+        results.append(c.post("/api/auth/code", json={"email": "a@example.com"}).status_code)
+
+    threads = [threading.Thread(target=ask, args=(ip,)) for ip in ("198.51.100.7", "198.51.100.8")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(results) == [202, 202], "both callers still get the generic 202"
+    assert len(client.app.state.mailer.sent) == 5
+    assert q("SELECT count(*) AS n FROM login_codes WHERE email = 'a@example.com'")[0]["n"] == 5
+
+
+def test_concurrent_verify_attempts_do_not_pass_the_ip_cap_together(client, q):
+    q("INSERT INTO verify_attempts (ip, created_at) SELECT '198.51.100.9', %s FROM generate_series(1, 29)", (T0,))
+    barrier = threading.Barrier(2)
+    responses = []
+
+    def guess():
+        c = TestClient(client.app, base_url="https://testserver", client=("198.51.100.9", 1), headers=CSRF)
+        barrier.wait()
+        responses.append(c.post("/api/auth/verify", json={"email": "a@example.com", "code": "00000000"}))
+
+    threads = [threading.Thread(target=guess) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(r.status_code for r in responses) == [400, 429]
+    assert [r.headers["retry-after"] for r in responses if r.status_code == 429] == ["3600"]
+    assert q("SELECT count(*) AS n FROM verify_attempts")[0]["n"] == 30
+
+
+def test_superseded_code_stays_rejected_after_the_new_code_is_used(client):
+    first = request_code(client, "a@example.com")
+    second = request_code(client, "a@example.com")
+    assert client.post("/api/auth/verify", json={"email": "a@example.com", "code": second}).status_code == 200
+    r = client.post("/api/auth/verify", json={"email": "a@example.com", "code": first})
+    assert r.status_code == 400 and r.json() == {"error": "invalid_code"}
+
+
+def test_mail_failure_voids_only_the_failed_code(client, q):
+    # Two live rows at once (direct rows: the request flow now keeps at most one
+    # unused code per email). Failing the first mail must not void the second.
+    invite(client, "a@example.com")
+    pepper = client.app.state.settings.session_pepper
+    ids = {}
+    for label, code in (("first", "11111111"), ("second", "22222222")):
+        ids[label] = q(
+            "INSERT INTO login_codes (email, code_hash, created_at, expires_at) VALUES (%s, %s, %s, %s) RETURNING id",
+            ("a@example.com", code_hash(pepper, "a@example.com", code), T0, T0 + timedelta(minutes=10)),
+        )[0]["id"]
+    client.app.state.mailer.fail = RuntimeError("smtp down")
+    _mail_code(client.app.state, "a@example.com", "11111111", T0, ids["first"])
+    rows = {row["id"]: row for row in q("SELECT id, used_at FROM login_codes")}
+    assert rows[ids["first"]]["used_at"] is not None
+    assert rows[ids["second"]]["used_at"] is None
+    r = client.post("/api/auth/verify", json={"email": "a@example.com", "code": "22222222"})
+    assert r.status_code == 200
+
+
+def test_concurrent_first_signins_share_one_account(client, q):
+    invite(client, "a@example.com")
+    barrier = threading.Barrier(2)
+    opened, errors = [], []
+
+    def sign_in():
+        try:
+            with client.app.state.pool.connection() as conn:
+                barrier.wait()
+                opened.append(_open_session(conn, SimpleNamespace(headers={}), "a@example.com", None, T0))
+        except Exception as exc:  # collected and asserted below, not swallowed
+            errors.append(exc)
+
+    threads = [threading.Thread(target=sign_in) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert len(opened) == 2 and all(o is not None for o in opened)
+    assert len({o[0].id for o in opened}) == 1 and opened[0][1] != opened[1][1]
+    assert q("SELECT count(*) AS n FROM users")[0]["n"] == 1
+    assert q("SELECT count(*) AS n FROM sessions")[0]["n"] == 2
 
 
 def test_session_bump_refreshes_the_cookie(client):

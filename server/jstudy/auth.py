@@ -138,7 +138,13 @@ def clear_session_cookie(response: Response, settings) -> None:
     response.delete_cookie(settings.cookie_name, path="/", secure=not settings.dev, httponly=True, samesite="lax")
 
 
+def _advisory_lock(conn, key: str) -> None:
+    """Serialises callers sharing `key` until the current transaction ends."""
+    conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (key,))
+
+
 def _limit(conn, column: str, value, now: datetime, cap: int) -> None:
+    _advisory_lock(conn, f"login_codes:{column}:{value}")
     row = conn.execute(
         sql.SQL("SELECT count(*) AS n, min(created_at) AS oldest FROM login_codes WHERE {} = %s AND created_at > %s")
         .format(sql.Identifier(column)),
@@ -188,20 +194,24 @@ def request_code(request: Request, tasks: BackgroundTasks, body: dict = Body(...
             log.warning("login code cap reached for an invited address")
             return {"ok": True}
         conn.execute(
-            "INSERT INTO login_codes (email, code_hash, ip, created_at, expires_at) VALUES (%s, %s, %s, %s, %s)",
-            (email, code_hash(st.settings.session_pepper, email, code), ip, now, now + CODE_TTL),
+            "UPDATE login_codes SET used_at = %s WHERE email = %s AND used_at IS NULL", (now, email),
         )
-    tasks.add_task(_mail_code, st, email, code, now)
+        row = conn.execute(
+            "INSERT INTO login_codes (email, code_hash, ip, created_at, expires_at) VALUES (%s, %s, %s, %s, %s)"
+            " RETURNING id",
+            (email, code_hash(st.settings.session_pepper, email, code), ip, now, now + CODE_TTL),
+        ).fetchone()
+    tasks.add_task(_mail_code, st, email, code, now, row["id"])
     return {"ok": True}
 
 
-def _mail_code(st, email: str, code: str, now: datetime) -> None:
+def _mail_code(st, email: str, code: str, now: datetime, code_id: int) -> None:
     try:
         st.mailer.send(email, "Your sign-in code", code_mail(code, st.settings.public_origin))
     except Exception as exc:  # provider-agnostic boundary: whatever failed, the code must not stay usable
         log.error("login code mail failed: %s: %s", type(exc).__name__, exc)
         with st.pool.connection() as conn:
-            conn.execute("UPDATE login_codes SET used_at = %s WHERE email = %s AND used_at IS NULL", (now, email))
+            conn.execute("UPDATE login_codes SET used_at = %s WHERE id = %s AND used_at IS NULL", (now, code_id))
 
 
 @router.post("/api/auth/verify")
@@ -216,6 +226,7 @@ def verify_code(request: Request, response: Response, body: dict = Body(...)):
     opened = matched = None
     with st.pool.connection() as conn:
         if ip is not None:
+            _advisory_lock(conn, f"verify_attempts:ip:{ip}")
             # Counted by the verifying IP: a guesser elsewhere would not show up in login_codes.ip.
             tries = conn.execute(
                 "SELECT count(*) AS n FROM verify_attempts WHERE ip = %s AND created_at > %s", (ip, now - HOUR),
@@ -247,6 +258,9 @@ def verify_code(request: Request, response: Response, body: dict = Body(...)):
 def _open_session(conn, request: Request, email: str, ip, now: datetime):
     """Returns (user, token), or None when the address is neither an active account nor invited.
     The first sign-in turns the invite into the account."""
+    _advisory_lock(conn, f"open_session:{email}")
+    # Read only after the lock: a concurrent first sign-in for this address has
+    # committed by now, so its new account is picked up instead of rejected.
     row = conn.execute("SELECT id, is_admin, disabled_at FROM users WHERE lower(email) = %s", (email,)).fetchone()
     if row is None:
         if conn.execute("DELETE FROM invites WHERE email = %s RETURNING email", (email,)).fetchone() is None:

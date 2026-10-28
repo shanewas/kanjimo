@@ -1,5 +1,6 @@
 """Progress mirror per user with optimistic revisions. The server checks shape and size only."""
 import json
+import math
 
 from fastapi import APIRouter, Body, Depends, Request, Response
 from fastapi.responses import JSONResponse
@@ -16,6 +17,25 @@ MAX_KEY = 64
 VERSIONS = (3, 4)
 
 
+def _check_json_value(value) -> None:
+    """Rejects what jsonb cannot hold: lone-surrogate text and non-finite numbers."""
+    if isinstance(value, str):
+        try:
+            value.encode()
+        except UnicodeEncodeError:
+            raise ApiError(400, "bad_store") from None
+    elif isinstance(value, float):
+        if not math.isfinite(value):
+            raise ApiError(400, "bad_store")
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _check_json_value(key)
+            _check_json_value(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _check_json_value(item)
+
+
 def validate_store(store) -> int:
     """Returns the serialised size. 400 for a wrong shape, 413 above the size cap."""
     if not isinstance(store, dict) or store.get("version") not in VERSIONS:
@@ -24,17 +44,24 @@ def validate_store(store) -> int:
         value = store.get(key)
         if not isinstance(value, dict) or len(value) > cap or any(len(k) > MAX_KEY for k in value):
             raise ApiError(400, "bad_store")
+    _check_json_value(store)
     size = len(json.dumps(store, separators=(",", ":"), ensure_ascii=False).encode())
     if size > MAX_BYTES:
         raise ApiError(413, "too_large")
     return size
 
 
+MAX_REV = 2**63 - 1
+
+
 def parse_if_match(value: str | None) -> int:
     digits = (value or "").strip().strip('"')
-    if not digits.isdigit():
+    if len(digits) > 19 or not digits.isascii() or not digits.isdigit():
         raise ApiError(428, "if_match_required")
-    return int(digits)
+    rev = int(digits)
+    if rev > MAX_REV:
+        raise ApiError(428, "if_match_required")
+    return rev
 
 
 @router.get("/api/progress")
