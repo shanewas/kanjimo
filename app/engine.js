@@ -70,6 +70,20 @@ export function pickReviews(rids, items, indexById, n, order, rng = Math.random)
   return out.slice(0, Math.max(0, n));
 }
 
+// "Keep going" past the quota serves another quota-sized batch of reviews
+// (see buildEntries in app.js), so with reviewsPerDay 0 it can only serve
+// lessons. Offering it for reviews alone would bounce straight back, unsent.
+export function canKeepGoing(reviewsLeft, lessonsReady, reviewsPerDay) {
+  return lessonsReady > 0 || (reviewsPerDay > 0 && reviewsLeft > 0);
+}
+
+// The day's done flag settles the streak, but it refuses autostart only
+// when no work is owed: reviews that fell due after an idle morning (or
+// lessons that opened since) still open straight into a session.
+export function doneBlocksAutostart(todayDone, reviewsDue, lessonsReady) {
+  return !!todayDone && reviewsDue <= 0 && lessonsReady <= 0;
+}
+
 export function kanjiProgress(index, items, level, type = "kanji") {
   let total = 0, passed = 0;
   for (const r of index) {
