@@ -85,6 +85,24 @@ describe("streak and freezes", () => {
     assert.equal(streak(d, "2026-10-08"), 19);
   });
 
+  it("settle before marking a day done freezes the miss before it", () => {
+    const d = {};
+    row(d, "2026-10-06").done = true;
+    settle(d, "2026-10-08");
+    row(d, "2026-10-08").done = true;
+    assert.equal(d["2026-10-07"].freeze, true);
+    assert.equal(streak(d, "2026-10-08"), 2);
+  });
+
+  it("marking a day done before settling hides the miss before it", () => {
+    const d = {};
+    row(d, "2026-10-06").done = true;
+    row(d, "2026-10-08").done = true;
+    settle(d, "2026-10-09");
+    assert.equal(d["2026-10-07"], undefined, "settle only looks after the last marked day");
+    assert.equal(streak(d, "2026-10-09"), 1);
+  });
+
   it("daysActive counts rows with any activity in the month", () => {
     const d = {};
     recordReview(d, "2026-10-01", 0, false);

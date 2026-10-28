@@ -622,6 +622,7 @@ function renderToday(v) {
   // Nothing owed on either side counts as done, today and on the empty
   // days ahead, so a stretch with nothing to do never breaks the chain.
   if (idle && !(DB.store.days[today] && DB.store.days[today].done)) {
+    settle(DB.store.days, today);
     markDone(DB.store.days, today, 0, 0, s);
     markIdleDays();
     saveStore();
@@ -1273,6 +1274,7 @@ function closeSession() {
   session = null;
   phase = "idle";
   DB.store.session = null;
+  settle(DB.store.days, todayKey());
   markDone(DB.store.days, todayKey(), dueItems(DB.store.items, Date.now()).length, lessonsReady().length, DB.store.settings);
   markIdleDays();
   saveStore();
