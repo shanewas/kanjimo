@@ -69,6 +69,16 @@ describe("answer check", () => {
     assert.deepEqual(checkAnswer(reading, "reading", "jo"), { ok: false });
   });
 
+  it("readings: full-width romaji and inner spaces still convert", () => {
+    assert.deepEqual(checkAnswer({ answers: ["か"] }, "reading", "ｋａ"), { ok: true });
+    assert.deepEqual(checkAnswer({ answers: ["きょう"] }, "reading", "ｋｙｏｕ"), { ok: true });
+    assert.deepEqual(checkAnswer({ answers: ["きょう"] }, "reading", "ＫＹＯＵ"), { ok: true });
+    assert.deepEqual(checkAnswer({ answers: ["かき"] }, "reading", "ka ki"), { ok: true });
+    assert.deepEqual(checkAnswer({ answers: ["かき"] }, "reading", "ka　ki"), { ok: true });
+    assert.deepEqual(checkAnswer({ answers: ["か"] }, "reading", "ｋｉ"), { ok: false });
+    assert.deepEqual(checkAnswer(reading, "reading", "ｊｏ"), { ok: false });
+  });
+
   it("readings: shakes on leftover latin, small-kana slips, empty input", () => {
     assert.ok(checkAnswer(reading, "reading", "jouk").shake);
     assert.ok(checkAnswer(reading, "reading", "じよう").shake);

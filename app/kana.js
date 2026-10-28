@@ -33,7 +33,8 @@ const PREFIXES = new Set();
 for (const k of Object.keys(T)) for (let i = 1; i < k.length; i++) PREFIXES.add(k.slice(0, i));
 
 export function toKana(input, final = false) {
-  const s = input.toLowerCase();
+  // NFKC first: full-width IME romaji (ｋａ) becomes plain ka.
+  const s = input.normalize("NFKC").toLowerCase();
   let out = "";
   let i = 0;
   while (i < s.length) {
