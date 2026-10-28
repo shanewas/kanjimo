@@ -4,7 +4,7 @@
 // Rules live in engine.js and ledger.js (pure); persistence in store.js.
 import { fmtWait, stageName, waitFor } from "./scheduler.js";
 import {
-  answer, completeItem, currentPrompt, dueItems, forecast, gradedElsewhere, isAvailable, kanjiProgress,
+  answer, canKeepGoing, completeItem, currentPrompt, doneBlocksAutostart, dueItems, forecast, gradedElsewhere, isAvailable, kanjiProgress,
   lessonQueue, levelUp, makeSession, pickReviews, resurrect, seedLevels, stageCounts, startItem,
 } from "./engine.js";
 import {
@@ -645,7 +645,7 @@ function renderToday(v) {
   const btns = el("div", "btn-row");
   if (row.done && row.r + row.l > 0) {
     p.appendChild(el("p", null, "Done for today."));
-    if (!idle) btns.appendChild(link("#/review", "Keep going", "btn btn-ghost btn-sm"));
+    if (canKeepGoing(due, lessons, s.reviewsPerDay)) btns.appendChild(link("#/review", "Keep going", "btn btn-ghost btn-sm"));
   } else if (idle) {
     p.appendChild(el("p", "muted", "Nothing to do yet. Lessons open as items reach Guru. Today counts as done."));
     btns.appendChild(link("#/browse", "Browse levels", "btn btn-ghost"));
@@ -851,7 +851,7 @@ function cardFor(p) {
 function endLink() {
   const end = el("button", "linklike", "End early");
   end.type = "button";
-  end.addEventListener("click", () => finishSession(view()));
+  end.addEventListener("click", () => { closeSession(); location.hash = "#/today"; });
   return end;
 }
 function renderPrompt(v) {
@@ -1127,7 +1127,7 @@ function renderPause(v) {
   go.addEventListener("click", () => renderPrompt(view()));
   const stop = el("button", "btn btn-ghost", "Stop");
   stop.type = "button";
-  stop.addEventListener("click", () => finishSession(view()));
+  stop.addEventListener("click", () => { closeSession(); location.hash = "#/today"; });
   row.append(go, stop);
   panel.appendChild(row);
   v.appendChild(panel);
@@ -1339,7 +1339,7 @@ function finishSession(v) {
   p.appendChild(el("p", "small muted", projectionLine()));
   const row = el("div", "btn-row");
   row.append(link("#/today", "Today", "btn btn-primary"));
-  if (remaining > 0 || lessons > 0) row.append(link("#/review", "Keep going", "btn btn-ghost"));
+  if (canKeepGoing(remaining, lessons, DB.store.settings.reviewsPerDay)) row.append(link("#/review", "Keep going", "btn btn-ghost"));
   p.appendChild(row);
   v.appendChild(p);
 }
@@ -2154,7 +2154,8 @@ async function render() {
     autostarted = true;
     if (DB.store.settings.autostart && Object.keys(DB.store.items).length
         && (storeStatus === "ok" || storeStatus === "fresh") && !saveFailed
-        && !(DB.store.days[todayKey()] && DB.store.days[todayKey()].done)
+        && !doneBlocksAutostart(!!(DB.store.days[todayKey()] && DB.store.days[todayKey()].done),
+          dueItems(DB.store.items, Date.now()).length, lessonsReady().length)
         && (dueItems(DB.store.items, Date.now()).length || lessonsReady().length)) {
       location.hash = "#/review";
       return;
