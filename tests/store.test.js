@@ -5,6 +5,7 @@ import {
   DEFAULT_SETTINGS, HANDOFF, KEY, QUARANTINE, SYNC_KEY, backup, fresh, load, loadSync, merge, migrateV1, migrateV2, migrateV3, parseImport,
   quarantined, save, saveSync,
 } from "../app/store.js";
+import { completeItem, dueItems } from "../app/engine.js";
 
 const NOW = 1_786_000_000_000;
 function fakeStorage(init = {}, failSet = null) {
@@ -180,6 +181,16 @@ describe("merge", () => {
     assert.equal(merge(a, b, TODAY).settingsAt, 9);
   });
 
+  it("breaks a settingsAt tie on the settings content, from both directions", () => {
+    const p = v4({}, { settingsAt: 42, settings: { ...DEFAULT_SETTINGS, batch: 4 } });
+    const q = v4({}, { settingsAt: 42, settings: { ...DEFAULT_SETTINGS, batch: 8 } });
+    assert.equal(merge(p, q, TODAY).settings.batch, 8);
+    assert.equal(merge(q, p, TODAY).settings.batch, 8);
+    assert.deepEqual(merge(p, q, TODAY).settings, merge(q, p, TODAY).settings);
+    assert.equal(merge(p, q, TODAY).settingsAt, 42);
+    assert.equal(merge(q, p, TODAY).settingsAt, 42);
+  });
+
   it("keeps the local session only when it started today", () => {
     const today = { ...a, session: { startedAt: new Date(2026, 9, 9, 8).getTime(), prompts: [], pos: 0, progress: {}, completed: 0 } };
     const stale = { ...a, session: { ...today.session, startedAt: new Date(2026, 9, 8, 8).getTime() } };
@@ -264,6 +275,16 @@ describe("load and save", () => {
     const s = parseImport({ version: 3, items: {}, settings: { batch: 0, reviewsPerDay: -5, lessonsPerDay: 1000, apprenticeCap: 2.7, examDate: "soon" } }, NOW);
     assert.deepEqual([s.settings.batch, s.settings.reviewsPerDay, s.settings.lessonsPerDay, s.settings.apprenticeCap], [3, 0, 100, 2]);
     assert.equal(s.settings.examDate, DEFAULT_SETTINGS.examDate);
+  });
+
+  it("floors a fractional imported stage so the item becomes due and stays schedulable", () => {
+    const s = parseImport({
+      version: 4,
+      items: { "kanji/x": { stage: 2.5, due: NOW - 1, lapses: 0, started: 1, passed: 0, burned: 0, at: 1 } },
+    }, NOW);
+    assert.equal(s.items["kanji/x"].stage, 2);
+    assert.deepEqual(dueItems(s.items, NOW), ["kanji/x"]);
+    assert.ok(Number.isFinite(completeItem(s.items["kanji/x"], 0, NOW, 12).state.due));
   });
 
   it("round-trips a v4 store and drops malformed items", () => {
