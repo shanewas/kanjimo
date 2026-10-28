@@ -13,6 +13,7 @@ import {
 } from "./ledger.js";
 import * as Store from "./store.js";
 import * as Sync from "./sync.js";
+import * as Tabs from "./tabs.js";
 const todayKey = () => dayKey(new Date());
 import { checkAnswer } from "./answer.js";
 import { toKana } from "./kana.js";
@@ -1286,6 +1287,9 @@ function closeSession() {
   markIdleDays();
   saveStore();
   updateBadge();
+  // Stores that arrived mid-session were held back by tabs.js; with the
+  // session's grades saved they merge now, before the next view paints.
+  Tabs.applyPending();
 }
 function finishSession(v) {
   const s = stats || newStats();
@@ -2253,6 +2257,25 @@ async function boot() {
   setInterval(() => {
     if (location.hash !== lastHash) requestRender();
   }, 250);
+  // Cross-tab wiring: another tab's store write merges into this one (see
+  // tabs.js). A merged copy is saved without queueing a push — the tab that
+  // made the change already queued its own — and the view repaints unless
+  // a session is running (tabs.js holds those until the session ends) or
+  // the Done screen is up, where a repaint would start a new session.
+  Tabs.init({
+    getStore: () => DB.store,
+    setStore: (s) => {
+      DB.store = s;
+      settle(DB.store.days, todayKey());
+      persist();
+      updateBadge();
+    },
+    inSession: () => !!session,
+    refresh: () => {
+      if (!session && !location.hash.startsWith("#/review")) requestRender();
+    },
+  });
+  window.addEventListener("storage", Tabs.onStorage);
   // Sync wiring: store.js keeps the only hands on localStorage, sync.js the
   // only ones on /api/*; a pulled copy is saved without queueing a push.
   Sync.init({
