@@ -242,11 +242,13 @@ def verify_code(request: Request, response: Response, body: dict = Body(...)):
         ).fetchone()
         # The attempt counter must survive a wrong guess, so no exception is raised inside this transaction.
         if row is not None and row["attempts"] < CODE_ATTEMPTS:
-            conn.execute("UPDATE login_codes SET attempts = attempts + 1 WHERE id = %s", (row["id"],))
             if hmac.compare_digest(bytes(row["code_hash"]), code_hash(st.settings.session_pepper, email, code)):
-                conn.execute("UPDATE login_codes SET used_at = %s WHERE id = %s", (now, row["id"]))
                 matched = True
                 opened = _open_session(conn, request, email, ip, now)
+                if opened is not None:
+                    conn.execute("UPDATE login_codes SET used_at = %s WHERE id = %s", (now, row["id"]))
+            else:
+                conn.execute("UPDATE login_codes SET attempts = attempts + 1 WHERE id = %s", (row["id"],))
     if opened is None:
         # A right code for an address disabled or uninvited since the code was sent.
         raise ApiError(403, "not_invited") if matched else ApiError(400, "invalid_code")
