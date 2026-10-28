@@ -891,7 +891,7 @@ function renderPrompt(v) {
   input.focus();
   if (p.part === "reading") {
     input.addEventListener("input", () => {
-      const k = toKana(input.value);
+      const k = toKana(input.value.replace(/\s+/g, ""));
       if (k !== input.value) input.value = k;
     });
   }

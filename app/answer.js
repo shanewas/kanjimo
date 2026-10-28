@@ -40,7 +40,7 @@ export function checkAnswer(card, part, input) {
   const raw = (input || "").trim();
   if (!raw) return { shake: "Type an answer first." };
   if (part === "reading") {
-    const kana = toKana(raw, true);
+    const kana = toKana(raw.replace(/\s+/g, ""), true);
     if (LATIN.test(kana)) return { shake: "Readings are kana. Finish the romaji so it converts." };
     const want = foldKana(kana);
     const listed = card.answers.map(foldKana);
