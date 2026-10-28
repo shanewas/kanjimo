@@ -136,3 +136,4 @@ Each surface choice above leans on a finding from learning research. The SRS rul
 | 2026-10-09 | Mnemonic opens on a miss; audio only after the answer | Immediate corrective feedback; the prompt stays a real retrieval |
 | 2026-10-09 | Pace averages a young ledger over its own age | Day one read "projected level 1, level 60 around 2098" at five lessons a day |
 | 2026-10-19 | No payments: every level open after sign-in; Stripe, Pro and the paywall removed | A free service; the daily file budget stays as the anti-scrape limit |
+| 2026-10-29 | Two open tabs converge on the `storage` event through the sync `merge()`; mid-session writes are held and merged when the session ends | The last tab to save used to clobber the other's grades; merging identical states writes nothing, so tabs settle instead of echoing, and no card is repainted mid-answer |
