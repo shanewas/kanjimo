@@ -174,6 +174,70 @@ def test_superseded_code_stays_rejected_after_the_new_code_is_used(client):
     assert r.status_code == 400 and r.json() == {"error": "invalid_code"}
 
 
+def test_correct_code_for_disabled_account_is_not_consumed(client, q):
+    code = request_code(client, "m@example.com")
+    q("INSERT INTO users (email, disabled_at) VALUES ('m@example.com', now())")
+    r = client.post("/api/auth/verify", json={"email": "m@example.com", "code": code})
+    assert r.status_code == 403 and r.json() == {"error": "not_invited"}
+    assert q("SELECT used_at FROM login_codes")[0]["used_at"] is None
+    assert q("SELECT count(*) AS n FROM sessions")[0]["n"] == 0
+    q("UPDATE users SET disabled_at = NULL WHERE email = 'm@example.com'")
+    r = client.post("/api/auth/verify", json={"email": "m@example.com", "code": code})
+    assert r.status_code == 200
+    assert q("SELECT used_at FROM login_codes")[0]["used_at"] is not None
+    assert q("SELECT count(*) AS n FROM sessions")[0]["n"] == 1
+
+
+def test_correct_code_for_removed_invite_is_not_consumed(client, q):
+    code = request_code(client, "new@example.com")
+    q("DELETE FROM invites WHERE email = 'new@example.com'")
+    r = client.post("/api/auth/verify", json={"email": "new@example.com", "code": code})
+    assert r.status_code == 403 and r.json() == {"error": "not_invited"}
+    assert q("SELECT used_at FROM login_codes")[0]["used_at"] is None
+    assert q("SELECT count(*) AS n FROM users")[0]["n"] == 0
+    assert q("SELECT count(*) AS n FROM sessions")[0]["n"] == 0
+    invite(client, "new@example.com")
+    r = client.post("/api/auth/verify", json={"email": "new@example.com", "code": code})
+    assert r.status_code == 200
+    assert q("SELECT used_at FROM login_codes")[0]["used_at"] is not None
+    assert q("SELECT count(*) AS n FROM sessions")[0]["n"] == 1
+
+
+def test_concurrent_verifies_of_one_code_open_exactly_one_session(client, q):
+    code = request_code(client, "a@example.com")
+    barrier = threading.Barrier(2)
+    responses = []
+
+    def verify():
+        c = TestClient(client.app, base_url="https://testserver", client=("198.51.100.7", 1), headers=CSRF)
+        barrier.wait()
+        responses.append(c.post("/api/auth/verify", json={"email": "a@example.com", "code": code}))
+
+    threads = [threading.Thread(target=verify) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(r.status_code for r in responses) == [200, 400]
+    assert [r.json() for r in responses if r.status_code == 400] == [{"error": "invalid_code"}]
+    assert q("SELECT used_at FROM login_codes")[0]["used_at"] is not None
+    assert q("SELECT count(*) AS n FROM users")[0]["n"] == 1
+    assert q("SELECT count(*) AS n FROM sessions")[0]["n"] == 1
+
+
+def test_verify_rate_limit_still_counts_attempts_on_a_disabled_account(client, q):
+    code = request_code(client, "m@example.com")
+    q("INSERT INTO users (email, disabled_at) VALUES ('m@example.com', now())")
+    for _ in range(30):
+        r = client.post("/api/auth/verify", json={"email": "m@example.com", "code": code})
+        assert r.status_code == 403 and r.json() == {"error": "not_invited"}
+    r = client.post("/api/auth/verify", json={"email": "m@example.com", "code": code})
+    assert r.status_code == 429 and r.headers["retry-after"] == "3600"
+    assert q("SELECT count(*) AS n FROM verify_attempts")[0]["n"] == 30
+    assert q("SELECT used_at FROM login_codes")[0]["used_at"] is None
+    assert q("SELECT count(*) AS n FROM sessions")[0]["n"] == 0
+
+
 def test_mail_failure_voids_only_the_failed_code(client, q):
     # Two live rows at once (direct rows: the request flow now keeps at most one
     # unused code per email). Failing the first mail must not void the second.
