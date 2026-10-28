@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { DAY_MS, HOUR_MS } from "../app/scheduler.js";
 import {
-  answer, completeItem, currentPrompt, dueItems, forecast, isAvailable, kanjiProgress, lessonQueue,
+  answer, canKeepGoing, completeItem, currentPrompt, doneBlocksAutostart, dueItems, forecast, isAvailable, kanjiProgress, lessonQueue,
   levelUp, makeSession, pickReviews, resurrect, seedLevels, stageCounts, startItem, gradedElsewhere,
 } from "../app/engine.js";
 
@@ -219,6 +219,29 @@ describe("session", () => {
     assert.deepEqual(items["kanji/x"], { stage: 5, due: HOUR + 7 * DAY_MS, lapses: 0, started: NOW, passed: NOW, burned: 0 });
     assert.equal(items["radical/c"], undefined, "level 2 itself is not seeded");
     assert.equal(seedLevels(INDEX, items, 1, NOW), 0);
+  });
+});
+
+describe("keep going and autostart gates", () => {
+  it("quota 0: due reviews alone cannot keep going, ready lessons can", () => {
+    assert.equal(canKeepGoing(12, 0, 0), false);
+    assert.equal(canKeepGoing(12, 2, 0), true);
+    assert.equal(canKeepGoing(0, 0, 0), false);
+  });
+
+  it("quota above 0: remaining reviews or ready lessons can keep going", () => {
+    assert.equal(canKeepGoing(12, 0, 50), true);
+    assert.equal(canKeepGoing(0, 2, 50), true);
+    assert.equal(canKeepGoing(0, 0, 50), false);
+  });
+
+  it("done flag blocks autostart only when no work is owed", () => {
+    assert.equal(doneBlocksAutostart(true, 0, 0), true);
+    assert.equal(doneBlocksAutostart(true, 6, 0), false);
+    assert.equal(doneBlocksAutostart(true, 0, 3), false);
+    assert.equal(doneBlocksAutostart(true, 6, 3), false);
+    assert.equal(doneBlocksAutostart(false, 0, 0), false);
+    assert.equal(doneBlocksAutostart(false, 6, 0), false);
   });
 });
 
