@@ -628,7 +628,7 @@ function renderToday(v) {
     saveStore();
   }
   const row = todayRow();
-  const waiting = Math.max(0, due - Math.max(0, s.reviewsPerDay - row.r));
+  const waiting = Math.max(0, lessonQueue(DB.index, items, level).length - lessons);
   const units = s.reviewsPerDay + s.lessonsPerDay;
   const share = row.done || !units ? 100
     : Math.round((100 * (Math.min(row.r, s.reviewsPerDay) + Math.min(row.l, s.lessonsPerDay))) / units);

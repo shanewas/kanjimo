@@ -33,10 +33,12 @@ function sanitizeV4(d) {
   const s = fresh();
   s.level = clampLevel(d.level);
   for (const [rid, st] of Object.entries(d.items)) {
-    if (!st || typeof st.stage !== "number" || st.stage < 1 || st.stage > 9) continue;
+    if (!st || typeof st.stage !== "number" || !Number.isFinite(st.stage)) continue;
+    const stage = Math.floor(st.stage);
+    if (stage < 1 || stage > 9) continue;
     s.items[rid] = {
-      stage: st.stage,
-      due: st.stage >= 9 ? null : num(st.due),
+      stage,
+      due: stage >= 9 ? null : num(st.due),
       lapses: num(st.lapses), started: num(st.started), passed: num(st.passed), burned: num(st.burned),
       at: num(st.at),
     };
@@ -114,9 +116,10 @@ export function parseImport(raw, nowMs) {
 }
 
 // Two devices' copies of one store, folded into one. Pure, idempotent, and
-// commutative on items, days and level, so both sides converge whichever
-// pushes first. `a` is the local side: only its session can survive, and
-// only when it started today (`todayKey` passed in to keep this pure).
+// commutative on items, days, level and settings, so both sides converge
+// whichever pushes first. `a` is the local side: only its session can
+// survive, and only when it started today (`todayKey` passed in to keep
+// this pure).
 const ZERO_DAY = { r: 0, l: 0, miss: 0, up: 0, done: false, freeze: false };
 function newer(x, y) {
   return x.at !== y.at ? x.at > y.at : x.stage !== y.stage ? x.stage > y.stage : x.lapses > y.lapses;
@@ -137,7 +140,11 @@ export function merge(a, b, todayKey) {
       done: x.done || y.done, freeze: x.freeze || y.freeze,
     };
   }
-  const s = b.settingsAt > a.settingsAt ? b : a;
+  // A settingsAt tie breaks on the serialized settings, so both devices
+  // pick the same side whichever one is local.
+  const s = a.settingsAt !== b.settingsAt
+    ? (b.settingsAt > a.settingsAt ? b : a)
+    : (JSON.stringify(b.settings) > JSON.stringify(a.settings) ? b : a);
   out.settings = { ...s.settings };
   out.settingsAt = s.settingsAt;
   out.session = a.session && dayKey(new Date(a.session.startedAt)) === todayKey ? a.session : null;
