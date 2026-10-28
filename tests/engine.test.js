@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { DAY_MS, HOUR_MS } from "../app/scheduler.js";
 import {
   answer, completeItem, currentPrompt, dueItems, forecast, isAvailable, kanjiProgress, lessonQueue,
-  levelUp, makeSession, pickReviews, resurrect, seedLevels, stageCounts, startItem,
+  levelUp, makeSession, pickReviews, resurrect, seedLevels, stageCounts, startItem, gradedElsewhere,
 } from "../app/engine.js";
 
 const NOW = 1_786_000_000_000 + 17 * 60 * 1000;
@@ -62,6 +62,14 @@ describe("item lifecycle", () => {
     const prev = item(3);
     completeItem(prev, 1, NOW, LV);
     assert.deepEqual(prev, item(3));
+  });
+
+  it("gradedElsewhere: only a stamp newer than the session start counts", () => {
+    assert.equal(gradedElsewhere(item(3, { at: NOW + 1 }), NOW), true);
+    assert.equal(gradedElsewhere(item(3, { at: NOW - 1 }), NOW), false);
+    assert.equal(gradedElsewhere(item(3, { at: NOW }), NOW), false);
+    assert.equal(gradedElsewhere(undefined, NOW), false);
+    assert.equal(gradedElsewhere(item(3), NOW), false);
   });
 });
 

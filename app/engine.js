@@ -27,6 +27,12 @@ export function resurrect(prev, nowMs) {
   return { ...prev, stage: 1, due: nowMs };
 }
 
+// An item stamped after the session started was written elsewhere (another
+// device's sync); grading it again would move it a second stage.
+export function gradedElsewhere(st, startedAtMs) {
+  return !!st && !!st.at && st.at > startedAtMs;
+}
+
 // Lessons open at or below the current level once every prerequisite has
 // passed Guru at some point; a later drop never re-locks.
 export function isAvailable(ref, items, level) {
